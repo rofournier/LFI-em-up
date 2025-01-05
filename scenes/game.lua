@@ -1,10 +1,12 @@
 local game = {}
-local enemy_spawn_timer = 0
+local wave_spawn_timer = 0
 local level_timer = 0
+local boss_explosion_timer = 0
 local level_duration = 15
 local explosions = {}
 local waiting_for_menu = false
 local boss_spawned = false
+
 
 function game.load()
     music = love.audio.newSource("sound/music.mp3", "static")
@@ -16,6 +18,8 @@ function game.load()
     music:play()
     bullets = {}
     bonuses = {}
+    level_timer = 0
+    wave_spawn_timer = 0
     level = 1
     player = {
         x = 0,
@@ -55,10 +59,81 @@ function game.load()
                 { type = "enemy", x = love.graphics.getWidth() + 200, y = startY, speed = 180, image = enemy2, life = 3, animation = newAnimation(enemy2, 100, 107, 1) },
                 { type = "enemy", x = love.graphics.getWidth() + 300, y = startY, speed = 180, image = enemy2, life = 3, animation = newAnimation(enemy2, 100, 107, 1) },
                 { type = "enemy", x = love.graphics.getWidth() + 400, y = startY, speed = 180, image = enemy2, life = 3, animation = newAnimation(enemy2, 100, 107, 1) },
-            },
-            rate = 1
+            }
         }
     end
+
+    function createBossWave(sprite, startY)
+        return {
+            enemies = {
+                { type = "enemy", x = love.graphics.getWidth() - 350, y = startY, speed = 0, image = sprite, life = 100, animation = newAnimation(sprite, 400, 459, 1) }
+            }
+        }
+    end
+
+    function createWeaponBonusWave()
+        return {
+            enemies = {
+                { type = "bonus", x = love.graphics.getWidth(), y = love.math.random(love.graphics.getHeight()), speed = 180, image = bonus1 },
+            }
+        }
+    end
+
+    function createMissileBonusWave()
+        return {
+            enemies = {
+                { type = "bonus", x = love.graphics.getWidth(), y = love.math.random(love.graphics.getHeight()), speed = 180, image = bonus2 }
+            }
+        }
+    end
+
+    levels = {
+        [1] = {
+            wave_interval = 5,
+            wave_number = 4,
+            current_wave = 1,
+            create_wave = function()
+                local spawnY = love.math.random(80, love.graphics.getHeight() - 80)
+                return createSimpleWave(spawnY)
+            end
+        },
+        [2] = {
+            wave_interval = 1,
+            wave_number = 2,
+            current_wave = 1,
+            create_wave = function()
+                local spawnY = love.math.random(80, love.graphics.getHeight() - 80)
+                return createWeaponBonusWave(spawnY)
+            end
+        },
+        [3] = {
+            wave_interval = 3,
+            wave_number = 4,
+            current_wave = 1,
+            create_wave = function()
+                local spawnY = love.math.random(80, love.graphics.getHeight() - 80)
+                return createSimpleWave(spawnY)
+            end
+        },
+        [4] = {
+            wave_interval = 1,
+            wave_number = 2,
+            current_wave = 1,
+            create_wave = function()
+                local spawnY = love.math.random(80, love.graphics.getHeight() - 80)
+                return createMissileBonusWave(spawnY)
+            end
+        },
+        [5] = {
+            wave_interval = 1,
+            wave_number = 2,
+            current_wave = 1,
+            create_wave = function()
+                local spawnY = (love.graphics.getHeight() - enemy4:getHeight()) / 2
+                return createBossWave(enemy4, spawnY)
+            end
+        }
+    }
 end
 
 
@@ -67,7 +142,7 @@ function game.update(dt)
         game.handle_movement(dt)
         game.handle_shooting(dt)
         game.handle_enemy_spawning(dt)
-        game.handle_shoot_collisions()
+        game.handle_shoot_collisions(dt)
         game.handle_player_enemy_collisions()
         game.update_enemy_animations(dt)
     end
@@ -76,7 +151,8 @@ end
 
 
 function game.update_enemy_animations(dt)
-    for _, enemy in ipairs(enemies) do
+    for i = #enemies, 1, -1 do
+        enemy = enemies[i]
         if enemy.animation then
             enemy.animation.currentTime = enemy.animation.currentTime + dt
             if enemy.animation.currentTime >= enemy.animation.duration then
@@ -86,18 +162,16 @@ function game.update_enemy_animations(dt)
         enemy.x = enemy.x - enemy.speed * dt
         if enemy.x < -enemy.image:getWidth() then
             table.remove(enemies, i)
-        end
-        if enemy.image == enemy3 then
-            enemy.rotation = (enemy.rotation + dt) % (2 * math.pi)
-        end
-        if enemy.type == "bonus" then
-            enemy.y = enemy.y + enemy.speed * dt * (enemy.direction or 1)
-            if enemy.y < 0 then
-                enemy.y = 0
-                enemy.direction = 1
-            elseif enemy.y > love.graphics.getHeight() - enemy.image:getHeight() then
-                enemy.y = love.graphics.getHeight() - enemy.image:getHeight()
-                enemy.direction = -1
+        else
+            if enemy.type == "bonus" then
+                enemy.y = enemy.y + enemy.speed * dt * (enemy.direction or 1)
+                if enemy.y < 0 then
+                    enemy.y = 0
+                    enemy.direction = 1
+                elseif enemy.y > love.graphics.getHeight() - enemy.image:getHeight() then
+                    enemy.y = love.graphics.getHeight() - enemy.image:getHeight()
+                    enemy.direction = -1
+                end
             end
         end
     end
@@ -146,20 +220,28 @@ function game.lose_game(i, enemy)
     waiting_for_menu = true
 end
 
-function game.handle_shoot_collisions()
-    for i, bullet in ipairs(bullets) do
-        for j, enemy in ipairs(enemies) do
+function game.handle_shoot_collisions(dt)
+    for i = #bullets, 1, -1 do
+        local bullet = bullets[i]
+        for j = #enemies, 1, -1 do
+            local enemy = enemies[j]
             if game.check_collision(bullet, enemy) and enemy.type == "enemy" then
                 enemy.life = enemy.life - bullet.damage
                 if enemy.life <= 0 then
-                    table.remove(bullets, i)
                     table.remove(enemies, j)
                     player.score = player.score + 10
                     game.create_explosion(enemy.x, enemy.y)
-                else
-                    table.remove(bullets, i)
-                    hit:play()
+                    if enemy.image == enemy4 then
+                        for i = 1, 6 do
+                            for j = 1, 10 do
+                                game.create_explosion(enemy.x + (i - 3) * 80, enemy.y + (j - 3) * 80)
+                            end
+                        end
+                    end
                 end
+                table.remove(bullets, i)
+                hit:play()
+                break
             end
         end
     end
@@ -219,6 +301,7 @@ function game.keyreleased(key)
 end
 
 function game.draw_hud()
+    dt = love.timer.getDelta()
     local padding = 10
     local rectWidth = love.graphics.getWidth()
     local rectHeight = 50
@@ -228,11 +311,14 @@ function game.draw_hud()
     local text = scoreText .. "  " .. levelText .. "  " .. bombsText
     local textWidth = love.graphics.getFont():getWidth(text)
     local textHeight = love.graphics.getFont():getHeight()
+    local timeText = level_timer
 
     love.graphics.setColor(1, 1, 1)
     love.graphics.rectangle("fill", 0, 10, rectWidth, rectHeight)
     love.graphics.setColor(0, 0, 0)
     love.graphics.print(text, 10, 10 + (rectHeight - textHeight) / 2)
+    local timeText = string.format("Time: %.2f", level_timer)
+    love.graphics.print(timeText, rectWidth - love.graphics.getFont():getWidth(timeText) - padding, 10 + (rectHeight - textHeight) / 2)
     love.graphics.setColor(1, 1, 1) -- Reset color to white for other drawings
 end
 
@@ -329,8 +415,8 @@ function game.handle_shooting(dt)
         if weapon.level == 1 then
             game.create_bullet(weapon)
         elseif weapon.level == 2 then
-            game.create_bullet(weapon, -10) -- Create the first bullet with an upward offset
-            game.create_bullet(weapon, 10)  -- Create the second bullet with a downward offset
+            game.create_bullet(weapon, -10)
+            game.create_bullet(weapon, 10)
         elseif weapon.level >= 3 then
             game.create_bullet(weapon, -10)
             game.create_bullet(weapon, 0)
@@ -347,56 +433,34 @@ function game.handle_shooting(dt)
     end
 end
 
+
 function game.handle_enemy_spawning(dt)
     level_timer = level_timer + dt
-    enemy_spawn_timer = enemy_spawn_timer + dt
+    wave_spawn_timer = wave_spawn_timer + dt
 
-    if level_timer <= level_duration then
-        if level == 1 then
-            if enemy_spawn_timer >= 5 then
-                local wave = createSimpleWave(love.math.random(love.graphics.getHeight()))
-                local spawnY = love.math.random(80, love.graphics.getHeight() - 80)
-                local wave = createSimpleWave(spawnY)
-                for _, enemy in ipairs(wave.enemies) do
-                    table.insert(enemies, enemy)
-                end
+    local current_level = levels[level]
 
-                enemy_spawn_timer = 0
-            end
-        elseif level == 2 then
-            if enemy_spawn_timer >= 3 then
-                local wave = createSimpleWave(love.math.random(love.graphics.getHeight()))
-                local spawnY = love.math.random(80, love.graphics.getHeight() - 80)
-                local wave = createSimpleWave(spawnY)
-                for _, enemy in ipairs(wave.enemies) do
-                    table.insert(enemies, enemy)
-                end
-
-                enemy_spawn_timer = 0
-            end
+    if wave_spawn_timer >= current_level.wave_interval and current_level.current_wave ~= current_level.wave_number then
+        local wave = current_level.create_wave()
+        for _, enemy in ipairs(wave.enemies) do
+            table.insert(enemies, enemy)
         end
-    else
-        if not boss_spawned then
-            table.insert(enemies, { type = "enemy", x = love.graphics.getWidth() + 400, y = love.math.random(love.graphics.getHeight()), speed = 100, image = enemy3, life = 10, rotation = 0 })
-            table.insert(enemies, { type = "bonus", x = love.graphics.getWidth() + 500, y = love.math.random(love.graphics.getHeight()), speed = 200, image = bonus1 })
-            table.insert(enemies, { type = "bonus", x = love.graphics.getWidth() + 500, y = love.math.random(love.graphics.getHeight()), speed = 200, image = bonus2 })
-
-            -- Spawn the boss enemy4
-            table.insert(enemies, {
-                type = "enemy",
-                x = love.graphics.getWidth() - 300,
-                y = 20,
-                speed = 0,
-                image = enemy4,
-                life = 150,
-                animation = newAnimation(enemy4, 519, 636, 1)
-            })
-            boss_spawned = true
-        end
-
-        level_timer = 0
+        wave_spawn_timer = 0
+        current_level.current_wave = current_level.current_wave + 1
+    elseif current_level.current_wave == current_level.wave_number and #enemies == 0 then
         level = level + 1
+        if level > #levels then
+            game_over = true
+            waiting_for_menu = true
+            music:stop()
+            return
+        end
+        current_level = levels[level]
+        level_timer = 0
+        wave_spawn_timer = 0
+        current_level.current_wave = 1
     end
+
 end
 
 
